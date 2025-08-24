@@ -1,0 +1,7 @@
+.venv/
+db.sqlite3
+need-to-do.txt
+config.py
+command.txt
+*__pycache__
+docs/
