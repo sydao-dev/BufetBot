@@ -135,6 +135,9 @@ async def buy_cart(pay_url):
 async def all_order(lyceum):
     
     orders = await get_orders(lyceum)
+ 
+    if not orders:
+        return None
     
     keyboard = InlineKeyboardBuilder()
     

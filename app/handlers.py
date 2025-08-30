@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from collections import defaultdict
 import asyncio
+from aiogram import Bot, Dispatcher
 from datetime import datetime
 import config
 import os
@@ -49,7 +50,7 @@ async def lyceum_ans(callback: CallbackQuery):
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id
     
-    await rq.set_user(callback.from_user.id, callback.data.split("_")[1])
+    await rq.set_user(user_id, callback.data.split("_")[1])
     await callback.answer('Ви успішно обрали свій ліцей!')
     
     await delete_previous_messages(user_id, chat_id, callback.bot)
@@ -372,15 +373,10 @@ async def agree(callback: CallbackQuery):
         reply_markup=await kb.agree(callback.data.split("_")[1]),
         parse_mode='HTML'
     )
-    msg2 = await callback.message.answer(
-        '<i>P.S. "Інше"</i> ⬇️', 
-        reply_markup=kb.main,
-        parse_mode='HTML'
-    )
     
     if user_id not in user_messages:
         user_messages[user_id] = []
-    user_messages[user_id].extend([msg1.message_id, msg2.message_id])
+    user_messages[user_id].extend([msg1.message_id])
 
 @router.callback_query(F.data.startswith('agree_'))
 async def buy_cart(callback: CallbackQuery):
@@ -435,14 +431,41 @@ async def successful_payment(message: Message):
     )
     
     today = datetime.now().strftime("%d.%m.%Y")
+    
+    await rq.change_order_pay(order.id)
+    
     if order.date.split("_")[0] == today:
-        await rq.change_order_pay(order.id)
+        
+        
         catalog_items = order.catalog.split('_')
+        
         for i in range(0, len(catalog_items), 2):
+            
             if i + 1 < len(catalog_items):
                 item_name = catalog_items[i]
                 item_count = catalog_items[i+1]
+                
                 await rq.change_count_product(item_name, item_count, order.lyceum)
+                
+    admins = await rq.get_admin(order.lyceum)
+    
+    for admin in admins:
+        
+        info = order.catalog.split('_')
+        message__to_send = ''
+        while info:
+            item_name = info.pop(0)
+            item_count = info.pop(0)
+            message__to_send += f'{item_name}: {item_count} шт.\n'
+        
+        bot = message.bot
+        
+        await bot.send_message(
+            chat_id=int(admin.tg_id),
+            text=f'''Замовлення №{order.code}\n\n{message__to_send}\nЗамовлення заберуть: {order.date.split("_")[0]}, {order.date.split("_")[1]} зміна, {order.date.split("_")[2]} перерва!''', 
+                                  reply_markup= await kb.order_take(order.code)
+            )
+        
 
 @router.message(F.text == 'Інше')
 async def dodatok(message: Message):
@@ -461,7 +484,7 @@ async def admin_panel(message: Message):
     user = await rq.get_user(message.from_user.id)
     
     if user:
-        await message.answer('Вітаю, оберіть ліцей у якому хочете змітини наявність продуктів або видати замовлення!', reply_markup=await kb.admin_lyceums())
+        await message.answer('Вітаю, оберіть ліцей у якому хочете змітини наявність продуктів або видати замовлення!', reply_markup = await kb.admin_lyceums())
     
     else:
         await message.answer('У вас немає прав адміністратора, якщо вони мають бути у вас зверніться до іншого адміністратора!')
@@ -477,7 +500,13 @@ async def active_order_1(message: Message):
     user = await rq.check_admin(message.from_user.id)
     if user:
         user = await rq.get_user(message.from_user.id)
-        await message.answer(f'Оберіть замовлення з Вараського ліцею №{user.lyceum} нижче!', reply_markup= await kb.all_order(user.lyceum))
+        
+        keyboard = await kb.all_order(user.lyceum)
+        
+        if keyboard is None:
+            await message.answer(f'Наразі немає активних замовлень у Вараському ліцеї №{user.lyceum}')
+        else:
+            await message.answer(f'Оберіть замовлення з Вараського ліцею №{user.lyceum} нижче!', reply_markup=keyboard)
     else:
         await message.answer('У вас немає прав для цього!')
 
@@ -485,13 +514,19 @@ async def active_order_1(message: Message):
 async def active_order_2(callback: CallbackQuery):
     
     await callback.message.delete()
-    callback.answer('')
+    await callback.answer()
     
     user = await rq.check_admin(callback.from_user.id)
     
     if user:
         user = await rq.get_user(callback.from_user.id)
-        await callback.message.answer(f'Оберіть замовлення з Вараського ліцею №{user.lyceum} нижче!', reply_markup= await kb.all_order(user.lyceum))
+ 
+        keyboard = await kb.all_order(user.lyceum)
+        
+        if keyboard is None:
+            await callback.message.answer(f'Наразі немає активних замовлень у Вараському ліцеї №{user.lyceum}')
+        else:
+            await callback.message.answer(f'Оберіть замовлення з Вараського ліцею №{user.lyceum} нижче!', reply_markup=keyboard)
     else:
         await callback.message.answer('У вас немає прав для цього!')
     
@@ -527,7 +562,17 @@ async def order_taken(callback: CallbackQuery):
     
     await rq.change_actual(order.id)
     
-    await callback.message.answer(f'Оберіть замовлення з Вараського ліцею №{user.lyceum} нижче!', reply_markup= await kb.all_order(user.lyceum))
+    if user:
+        user = await rq.get_user(callback.from_user.id)
+ 
+        keyboard = await kb.all_order(user.lyceum)
+        
+        if keyboard is None:
+            await callback.message.answer(f'Наразі немає активних замовлень у Вараському ліцеї №{user.lyceum}')
+        else:
+            await callback.message.answer(f'Оберіть замовлення з Вараського ліцею №{user.lyceum} нижче!', reply_markup=keyboard)
+    else:
+        await callback.message.answer('У вас немає прав для цього!')
     
 
 @router.message(F.text == 'Змінити наявність')
